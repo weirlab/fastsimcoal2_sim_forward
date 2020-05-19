@@ -1,0 +1,546 @@
+library(dplyr)
+######################################
+###custom functions
+
+Fst_i_WC <- function(p1,p2,n1,n2,h_mean){
+   #Hudson's Estimator sensu Bhatia et al 2013
+   p_mean = mean(c(p1, p2))
+   n1 = n1*2
+   n2 = n2*2
+   n_tot = n1+n2
+   variance = var(c(p1, p2))
+   NUMERATOR_i = variance - (1/(2*n_tot - 1)) * (p_mean*(1-p_mean) - 0.5*variance - h_mean/4)
+   DENOMINATOR_i = p_mean * (1-p_mean) + 0.5 * variance
+   Fst_i = NUMERATOR_i /  DENOMINATOR_i
+   return(list(Fst_i = Fst_i, NUMERATOR_i = NUMERATOR_i, DENOMINATOR_i = DENOMINATOR_i))
+}
+
+
+
+Fst_boot_parallel <- function(DATA, NBOOT=100, NCLUST=1){
+   OUTPUT <- matrix(NA,nrow=NBOOT, ncol = 6)
+
+   BOOTSTRAP_FST <- function(DATA, SEED){
+         SAMPLES <- sample(1:(ncol(DATA)-2), size=(ncol(DATA)-2), replace = TRUE, prob = NULL)
+         DATA_i <- DATA[,c(1,2,SAMPLES)]
+	 AAA <- Fst_average(DATA_i)
+         return(AAA$Fst_HU_ratio_of_means)
+    }
+
+   library(foreach)
+   library(doMC)
+     #cl <- makeCluster(NCLUST)
+     registerDoMC(NCLUST)
+     #cores
+        SEEDS <- sample(1:999999999, size=NBOOT, replace=FALSE)
+        RESULT <- foreach(i=1:NBOOT, .combine=rbind) %dopar% 
+        {
+            BOOTSTRAP_FST(DATA, SEED = SEEDS[i])
+        }
+
+   OUTPUT2 <- matrix(NA, nrow=7, ncol=1)
+   row.names(OUTPUT2) <- c("Actual_Fst", "boot_mean", "boot_median", "boot_variance", "boot_percentile_CI95_low", "boot_percentile_CI95_high", "boot_SE")
+   colnames (OUTPUT2) <- c("Fst_ratio_of_means")
+
+   BBB <- Fst_average(DATA)
+   
+   OUTPUT2[1,1] <- BBB$Fst_HU_ratio_of_means
+   OUTPUT2[2,1] <- mean(RESULT)
+   OUTPUT2[3,1] <- median(RESULT)
+   OUTPUT2[4,1] <- var(RESULT)
+   QUANTILES1 <- quantile(x = RESULT, probs = seq(0, 1, 0.025), na.rm = TRUE)
+   #95% CI low
+   OUTPUT2[5,1] <- QUANTILES1[2]
+   #95% CI high
+   OUTPUT2[6,1] <- QUANTILES1[40]
+   #boot_SE
+   OUTPUT2[7,1] <- sqrt(1/(NBOOT - 1) * sum((RESULT - 1/NBOOT * sum(RESULT))^2))
+   
+   return(OUTPUT2)   
+}
+
+Fst_i_H <- function(p1,p2,n1,n2){
+   #Reich et al 2009 NATURE  Estimator which appears best for low sample size
+   #this turns out to be identical to Hudson's Estimator
+   n1 = n1*2
+   n2 = n2*2
+   a1 = p1*n1 #allele counts
+   a2 = p2*n2
+   h1 = (a1 * (n1-a1) ) / (n1 * (n1 - 1)) #i think expected heterogyzosity?
+   h2 = (a2 * (n2-a2) ) / (n2 * (n2 - 1))  
+   NUMERATOR_i = (a1/n1 - a2/n2)^2 - h1 / n1 - h2/n2
+   DENOMINATOR_i = NUMERATOR_i + h1 + h2
+   Fst_i = NUMERATOR_i /  DENOMINATOR_i
+   return(list(Fst_i = Fst_i, NUMERATOR_i = NUMERATOR_i, DENOMINATOR_i = DENOMINATOR_i))
+}
+
+Fst_average <- function(DATA){
+   #The best way to average is to take the average of the nominator and denominator separately
+   #and then use the ratio of these
+   POP1 <- DATA[DATA[,2]==1,]
+   POP2 <- DATA[DATA[,2]==2,]
+   RESULT <- matrix(NA, nrow=ncol(DATA) - 2, ncol = 8)
+   for(i in 3:ncol(DATA)){
+   	  n1 <- nrow(POP1) - sum(POP1[,i] == "?")
+	  n2 <- nrow(POP2) - sum(POP2[,i] == "?")
+	  if(min(n1,n2) > 1){
+         p1 <- (2 * sum(POP1[,i] == 0) + sum(POP1[,i] == 1) ) / (2*n1)
+         p2 <- (2 * sum(POP2[,i] == 0) + sum(POP2[,i] == 1) ) / (2*n2)
+		 het1 <- sum(POP1[,i] == 1) / n1
+		 het2 <- sum(POP2[,i] == 1) / n2
+	     RESULT_i <- Fst_i_H(p1,p2,n1,n2)
+	     RESULT[i-2,1] <- n1
+	     RESULT[i-2,2] <- n2
+	     RESULT[i-2,3] <- RESULT_i$Fst_i
+	     RESULT[i-2,4] <- RESULT_i$NUMERATOR_i  
+	     RESULT[i-2,5] <- RESULT_i$DENOMINATOR_i
+		 h_mean= mean(c(het1, het2))
+		 RESULT_ii <- Fst_i_WC(p1,p2,n1,n2,h_mean)
+		 RESULT[i-2,6] <- RESULT_ii$Fst_i
+	     RESULT[i-2,7] <- RESULT_ii$NUMERATOR_i  
+	     RESULT[i-2,8] <- RESULT_ii$DENOMINATOR_i
+      }
+   }
+   Fst_HU_median_of_ratios  <- median(RESULT[,3], na.rm=TRUE)
+   Fst_HU_ratio_of_means <- mean(RESULT[,4], na.rm=TRUE) / mean(RESULT[,5], na.rm=TRUE)
+   Fst_HU_mean_of_ratios <- mean(RESULT[,3], na.rm=TRUE)
+   
+   Fst_WC_median_of_ratios  <- median(RESULT[,6], na.rm=TRUE)
+   Fst_WC_ratio_of_means <- mean(RESULT[,7], na.rm=TRUE) / mean(RESULT[,8], na.rm=TRUE)
+   Fst_WC_mean_of_ratios <- mean(RESULT[,6], na.rm=TRUE)
+   
+   return(list(Fst_HU_ratio_of_means = Fst_HU_ratio_of_means, Fst_HU_mean_of_ratios = Fst_HU_mean_of_ratios, Fst_HU_median_of_ratios = Fst_HU_median_of_ratios, Fst_WC_ratio_of_means = Fst_WC_ratio_of_means, Fst_WC_mean_of_ratios = Fst_WC_mean_of_ratios, Fst_WC_median_of_ratios = Fst_WC_median_of_ratios,SNP_Fsts_HU = invisible(RESULT[,3]), SNP_Fsts_WC = invisible(RESULT[,6])))
+}
+
+
+Pairwise_Hudsons_Fst <- function(DATA, BOOT = TRUE, NBOOT=100, NCORES){
+   #Perform pairwise comparison. Note, the 2nd column in DATA is each populations number from 1 to N
+   #this function runs in parallel on a Linux machine using the foreach and doMC packages (which must be pre-installed)
+
+   Npops <- max(DATA[,2])
+   MATRIX <- matrix(NA, Npops, Npops)
+   colnames(MATRIX) <- c(1:Npops)
+   rownames(MATRIX) <- c(1:Npops)
+   MATRIX_upperCI <- MATRIX
+   MATRIX_lowerCI <- MATRIX
+   MATRIX_combined <- MATRIX
+   for(i in 1:(ncol(MATRIX)-1)){
+      POP1 <- i
+      for(y in (POP1 + 1):ncol(MATRIX)){
+         print(paste("i = ", i, "; y = ", y, sep="")) 
+         POP2 <- y
+         DATA_i_y <- subset(DATA, subset = (DATA[,2] == POP1 | DATA[,2] == POP2))
+         DATA_i_y[DATA_i_y[,2] == POP1, 2] <- 1   
+         DATA_i_y[DATA_i_y[,2] == POP2, 2] <- 2   
+         Fst_i_y <- Fst_average(DATA_i_y)
+         MATRIX[y,i] <- Fst_i_y$Fst_HU_ratio_of_means
+
+         if(BOOT==TRUE){
+            BOOT_i_y <- Fst_boot_parallel(DATA_i_y, NBOOT, NCLUST = NCORES)
+            ACTUAL <- BOOT_i_y[1,1]
+            LOWERCI <- BOOT_i_y[5,1]
+            UPPERCI <- BOOT_i_y[6,1]
+            COMBINED <- paste(format(round(ACTUAL, 3), nsmall = 3), " (", format(round(LOWERCI, 3), nsmall = 3), " - ", format(round(UPPERCI, 3), nsmall = 3), ")", sep="")
+            MATRIX_lowerCI[y,i] <- LOWERCI
+            MATRIX_upperCI[y,i] <- UPPERCI
+            MATRIX_combined[y,i] <- COMBINED
+         }
+      }
+   }
+   if(BOOT==TRUE){return(MATRIX=MATRIX_combined)}
+   if(BOOT==FALSE){return(MATRIX)}
+}
+
+
+#from package strataG which I cannot install
+arlequinRead <- function(file) {
+  # read file
+  arp <- scan(file, what = "character", sep = "\n", quiet = TRUE)
+  arp <- stringi::stri_trim_both(arp)
+  arp <- arp[arp != ""]
+  
+  # collect Profile information
+  locus.separator <- .getValues("LocusSeparator", arp)
+  gametic.phase <- as.numeric(.getValues("GameticPhase", arp, "[[:punct:]]+"))
+  recessive.data <- as.numeric(.getValues("RecessiveData", arp, "[[:punct:]]+"))
+  recessive.allele <- .getValues("RecessiveAllele", arp, "[[:punct:]]+")
+  missing.data <- .getValues("MissingData", arp)
+  frequency <- .getValues("Frequency", arp)
+  frequency.threshold <- as.numeric(.getValues("FrequencyThreshold", arp))
+  epsilon.value <- as.numeric(.getValues("EpsilonValue", arp))
+  profile.info <- list(
+    title = .getValues("Title", arp, "[[:punct:]]+"),
+    nb.samples = as.numeric(.getValues("NbSamples", arp, "[[:punct:]]+")),
+    data.type = .getValues("DataType", arp, "[[:punct:]]+"),
+    genotypic.data = as.numeric(.getValues("GenotypicData", arp, "[[:punct:]]+")),
+    locus.separator = ifelse(is.na(locus.separator), "WHITESPACE", locus.separator),
+    gametic.phase = ifelse(is.na(gametic.phase), 1, gametic.phase),
+    recessive.data = ifelse(is.na(recessive.data), 0, recessive.data),
+    recessive.allele = ifelse(is.na(recessive.data), "null", recessive.allele),
+    missing.data = ifelse(is.na(missing.data), "?", missing.data),
+    frequency = ifelse(is.na(frequency), "ABS", frequency),
+    frequency.threshold = ifelse(is.na(frequency.threshold), 1e-5, frequency.threshold),
+    epsilon.value = ifelse(is.na(epsilon.value), 1e-7, epsilon.value)
+  )
+  
+  # collect Data information
+  data.info <- list()
+  
+  # Haplotype list
+  hap.def.i <- which(arp == "[[HaplotypeDefinition]]")
+  if(length(hap.def.i) == 1) {
+    data.info$haplotype.definition$name <- .getValues("HaplListName", arp)
+    hap.list <- .getExtern("HaplList", arp, folder = dirname(file))
+    # parse rows by whitespace from .arp or EXTERN file
+    hap.list <- if(is.null(hap.list)) {
+      .extractDataBlock(.getLine("HaplList", arp), arp)
+    } else {
+      strsplit(hap.list, "[[:space:]]+")
+    }
+    data.info$haplotype.definition$list <- .parseHaplotypicData(
+      hap.list, 
+      "id", 
+      profile.info$locus.separator,
+      profile.info$data.type == "DNA"
+    )
+  }
+  
+  # Distance matrix
+  dist.mat.i <- which(arp == "[[DistanceMatrix]]")
+  if(length(dist.mat.i) == 1) {
+    data.info$distance.matrix$name <- .getValues("MatrixName", arp)
+    matrix.data <- .getExtern("MatrixData", arp, folder = dirname(file))
+    matrix.data <- if(is.null(matrix.data)) {
+      .extractDataBlock(.getLine("MatrixData", arp), arp)
+    } else {
+      matrix.data <- strsplit(matrix.data, "[[:space:]]+")
+      matrix.data <- matrix.data[sapply(matrix.data, length) > 0]
+      lapply(matrix.data, function(x) x[x != ""])
+    }
+    size <- length(matrix.data) - 1
+    dist.mat <- matrix(NA, nrow = size, ncol = size)
+    rownames(dist.mat) <- colnames(dist.mat) <- matrix.data[[1]]
+    matrix.data <- matrix.data[-1]
+    for(i in 1:size) {
+      dist.row <- as.numeric(matrix.data[[i]])
+      dist.mat[i, ] <- c(dist.row, rep(NA, size - length(dist.row)))
+    }
+    data.info$distance.matrix$data <- swfscMisc::copy.tri(dist.mat, "lower")
+  }
+  
+  # Samples
+  samples.i <- which(arp == "[[Samples]]")
+  if(length(samples.i) == 1) {
+    sample.name <- .getValues("SampleName", arp)
+    sample.data <- lapply(.getLine("SampleData", arp), function(i) {
+      sample.data.i <- .extractDataBlock(i, arp)
+      # replace missing data with NA
+      sample.data.i <- lapply(sample.data.i, function(x) {
+        x[x == profile.info$missing.data] <- NA
+        x
+      })
+      # parse genetic data
+      if(profile.info$data.type == "FREQUENCY") {
+        .parseFrequencyData(sample.data.i)
+      } else if(profile.info$genotypic.data) {
+        .parseGenotypicData(sample.data.i) 
+      } else {
+        .parseHaplotypicData(
+          sample.data.i, 
+          c("id", "freq"),
+          profile.info$locus.separator,
+          profile.info$data.type == "DNA"
+        ) %>% 
+          dplyr::mutate(freq = as.numeric(.data$freq))
+      }
+    })
+    
+    data.info$sample.data <- do.call(
+      rbind, 
+      mapply(
+        function(name, size, data) {
+          cbind(strata = name, data, stringsAsFactors = FALSE) %>% 
+            dplyr::select(.data$id, dplyr::everything())
+        },
+        name = sample.name, data = sample.data,
+        SIMPLIFY = FALSE, USE.NAMES = FALSE
+      )
+    )
+  }
+  
+  # Genetic structure
+  structure.i <- which(arp == "[[Structure]]")
+  if(length(structure.i) == 1) {
+    data.info$genetic.structure$name <- .getValues("StructureName", arp)
+    data.info$genetic.structure$groups <- lapply(
+      .getLine("Group", arp), 
+      function(i) gsub("\"", "", unlist(.extractDataBlock(i, arp)))
+    )
+  }
+  
+  list(file = file, profile.info = profile.info, data.info = data.info)
+}
+
+
+#' @rdname arlequin
+#' @export
+#' 
+arp2gtypes <- function(arp, avoid.dups = FALSE) {
+  if(arp$profile.info$frequency == "REL") {
+    stop("can't convert RELative FREQUENCY data to gtypes")
+  }
+  if(arp$profile.info$genotypic.data) {
+    .diploid2gtype(arp, avoid.dups)
+  } else {
+    loc.sep <- switch(
+      arp$profile.info$locus.separator,
+      WHITESPACE = " ",
+      TAB = " ",
+      NONE = "",
+      arp$profile.info$locus.separator
+    )
+    
+    switch(
+      arp$profile.info$data.type,
+      FREQUENCY = .freq2gtype(arp, avoid.dups),
+      DNA = .dna2gtype(arp, avoid.dups),
+      RFLP = .standard2gtype(arp, avoid.dups, loc.sep),
+      STANDARD = .standard2gtype(arp, avoid.dups, loc.sep)
+    )
+  }
+}
+
+# Arlequin internal functions --------------------------------------------------
+
+#' @noRd
+#' 
+.removeComments <- function(x) {
+  gsub("[[:space:]]#[[:alnum:]|[:punct:]|[:space:]]+$", "", x)
+}
+
+#' @noRd
+#'
+# function to get value folowing "=" for a header title
+.getValues <- function(title, arp, remove = NULL) {
+  title <- paste0("^", title, "[[:space:]]*=[[:space:]]*")
+  x <- grep(title, arp, ignore.case = TRUE, value = TRUE)
+  if(length(x) == 0) return(NA) 
+  x <- gsub(title, "", x)
+  x <- .removeComments(x)
+  x <- gsub("[']|\"", "", x)
+  if(!is.null(remove)) x <- gsub(remove, "", x)
+  stringi::stri_trim_both(x)
+}
+
+#' @noRd
+#'
+.getLine <- function(title, arp) {
+  title <- paste0("^", title, "=")
+  i <- grep(title, arp, ignore.case = TRUE)
+  if(length(i) == 0) NULL else i
+}
+
+#' @noRd
+#'
+.getExtern <- function(title, arp, remove = NULL, folder = ".") {
+  x <- .getValues(title, arp, remove)
+  if(grepl("EXTERN", x)) {
+    file <- file.path(folder, gsub("EXTERN[[:space:]]+", "", x))
+    if(!file.exists(file)) stop("can't find EXTERN file: '", file, "'")
+    scan(file, what = "character", sep = "\n", quiet = TRUE)
+  } else NULL
+}
+
+#' @noRd
+#'
+.extractDataBlock <- function(start, arp) {
+  ends <- grep("}", arp)
+  end <- min(ends[ends > start])
+  data.block <- .removeComments(arp[(start + 1):(end-1)])
+  strsplit(data.block, "[[:space:]]+")
+}
+
+#' @noRd
+#'
+.parseFrequencyData <- function(sample.data) {
+  data.df <- do.call(rbind, sample.data) %>% 
+    as.data.frame(stringsAsFactors = FALSE)
+  if(ncol(data.df) != 2) {
+    stop("'SampleData' must be 2 columns if 'DataType=FREQUENCY'")
+  }
+  data.df %>% 
+    stats::setNames(c("id", "freq")) %>% 
+    dplyr::mutate(freq = as.numeric(.data$freq))
+}
+
+#' @noRd
+#'
+.parseHaplotypicData <- function(data.block, id.cols, loc.sep, is.dna) {
+  hap.data <- do.call(rbind, data.block)
+  if(is.dna & ncol(hap.data) > length(id.cols)) {
+    loc.data <- hap.data[, -(1:length(id.cols)), drop = FALSE]
+    hap.data <- cbind(
+      hap.data[, 1:length(id.cols)],
+      apply(loc.data, 1, paste, collapse = "")
+    )
+  } else {
+    has.1.locus.col <- ncol(hap.data) == length(id.cols) + 1
+    if(has.1.locus.col & !loc.sep %in% c("WHITESPACE", "TAB")) {
+      loc.sep <- ifelse(loc.sep == "NONE", "", loc.sep)
+      loc.data <- do.call(rbind, strsplit(hap.data[, ncol(hap.data)], loc.sep))
+      hap.data <- cbind(hap.data[, 1:length(id.cols)], loc.data)
+    }
+  }
+  loc.names <- if(ncol(hap.data) > length(id.cols)) {
+    paste0("locus_", 1:(ncol(hap.data) - length(id.cols)))
+  } else NULL
+  stats::setNames(
+    as.data.frame(hap.data, stringsAsFactors = FALSE),
+    c(id.cols, loc.names)
+  )
+}
+
+#' @noRd
+#'
+.parseGenotypicData <- function(sample.data) {
+  # sample.data is a list of character strings from a single SampleData block
+  if(length(sample.data) %% 2 != 0) {
+    stop("'SampleData' must have an even number of rows if 'GenotypicData=1'")
+  }
+  # create matrices of alternating rows
+  allele.1 <- do.call(rbind, sample.data[c(T, F)])
+  allele.2 <- do.call(rbind, sample.data[c(F, T)])
+  if(ncol(allele.1) != ncol(allele.2) + 2) {
+    stop("alternating rows in 'SampleData' must be two columns different") 
+  }
+  # remove id and frequency row from first allele matrix
+  id.freq <- allele.1[, 1:2]
+  colnames(id.freq) <- c("id", "freq")
+  allele.1 <- allele.1[, -(1:2), drop = FALSE]
+  # create data.frame combining matrices
+  colnames(allele.1) <- colnames(allele.2) <- paste0("locus_", 1:ncol(allele.1))
+  data.df <- rbind(
+    cbind(id.freq, allele = 1, allele.1),
+    cbind(id.freq, allele = 2, allele.2)
+  ) %>% 
+    as.data.frame(stringsAsFactors = FALSE) %>% 
+    dplyr::mutate(
+      freq = as.numeric(.data$freq),
+      allele = as.numeric(.data$allele)
+    )
+  # sort by id (original order) and allele number
+  data.df[order(match(data.df$id, id.freq[, "id"]), data.df$allele), ]
+}
+
+#' @noRd
+#'
+.expandByFreq <- function(x) {
+  do.call(
+    rbind,
+    lapply(1:nrow(x), function(i) {
+      freq <- x$freq[i]
+      if(freq == 1) return(x[i, ])
+      df.i <- x[rep(i, freq), ]
+      df.i$id <- paste0(df.i$id, "_", 1:freq)
+      df.i
+    })
+  )
+}
+
+#' @noRd
+#'
+.avoidDups <- function(x, avoid.dups) {
+  if(avoid.dups) {
+    if(anyDuplicated(x$id)) x$id <- paste0(x$strata, "_", x$id)
+  }
+  x
+}
+
+#' @noRd
+#'
+.diploid2gtype <- function(arp, avoid.dups) {    
+  sample.data <- arp$data.info$sample.data %>% 
+    tidyr::gather("locus", "value", dplyr::starts_with("locus_")) %>% 
+    dplyr::mutate(locus = paste0(.data$locus, ".", .data$allele)) %>% 
+    dplyr::select(-.data$allele) %>% 
+    tidyr::spread(.data$locus, .data$value)
+  if(any(sample.data$freq > 1)) sample.data <- .expandByFreq(sample.data)
+  sample.data %>% 
+    dplyr::select(-.data$freq) %>% 
+    .avoidDups(avoid.dups) %>% 
+    df2gtypes(ploidy = 2, description = arp$profile.info$title)
+}
+
+#' @noRd
+#'
+.freq2gtype <- function(arp, avoid.dups) {      
+  g <- .expandByFreq(arp$data.info$sample.data) %>% 
+    dplyr::select(-.data$freq) %>% 
+    dplyr::mutate(hap = .data$id) %>% 
+    .avoidDups(avoid.dups) %>% 
+    df2gtypes(ploidy = 1, description = arp$profile.info$title)
+  dist.mat <- arp$data.info$distance.matrix$data
+  if(!is.null(dist.mat)) setOther(g, "dist.mat") <- dist.mat
+  g
+}
+
+#' @noRd
+#'
+.dna2gtype <- function(arp, avoid.dups) {
+  sample.data <- arp$data.info$sample.data
+  haps <- arp$data.info$haplotype.definition$list
+  if(is.null(haps)) haps <- sample.data[, c("id", "locus_1")]
+  sample.data$locus_1 <- sample.data$id
+  g <- sample.data %>% 
+    .expandByFreq() %>% 
+    dplyr::select(.data$id, .data$strata, .data$locus_1) %>%
+    .avoidDups(avoid.dups) %>% 
+    df2gtypes(
+      ploidy = 1,
+      sequences = ape::as.DNAbin(
+        stats::setNames(strsplit(haps$locus_1, ""), haps$id)
+      ),
+      description = arp$profile.info$title
+    )
+  dist.mat <- arp$data.info$distance.matrix$data
+  if(!is.null(dist.mat)) setOther(g, "dist.mat") <- dist.mat
+  g
+}
+
+#' @noRd
+#'
+.standard2gtype <- function(arp, avoid.dups, loc.sep) {
+  sample.data <- arp$data.info$sample.data
+  haps <- arp$data.info$haplotype.definition$list
+  if(!is.null(haps)) {
+    haps <- data.frame(
+      id = haps[, 1], 
+      hap = apply(haps[, -1, drop = FALSE], 1, paste, collapse = loc.sep),
+      stringsAsFactors = FALSE
+    )
+    sample.data <- dplyr::left_join(sample.data, haps, by = "id")
+  } else if(nrow(sample.data) > 3) {
+    sample.data <- cbind(
+      sample.data[, 1:3],
+      hap = apply(
+        sample.data[, -(1:3), drop = FALSE], 
+        1, 
+        paste, 
+        collapse = loc.sep
+      ),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    sample.data$hap <- sample.data$id
+  }
+  
+  g <- sample.data %>% 
+    .expandByFreq() %>% 
+    dplyr::select(.data$id, .data$strata, .data$hap) %>% 
+    .avoidDups(avoid.dups) %>% 
+    df2gtypes(ploidy = 1, description = arp$profile.info$title)
+  dist.mat <- arp$data.info$distance.matrix$data
+  if(!is.null(dist.mat)) setOther(g, "dist.mat") <- dist.mat
+  g
+}
+
