@@ -30,7 +30,7 @@ source("/home/0_PROGRAMS/0_Weir_Lab_Custom_Code/fastSIMCOAL2_sim_forward_Pipelin
 ## USER SETS OPTIONS
 
 ```bash
-   WD="/home/0_PROGRAMS/fastsimcoal2/fsc26_linux64/SIMULATE_FORWARD_5POPS/"
+   WD="/home/0_PROGRAMS/fastsimcoal2/fsc26_linux64/SIMULATE_FORWARD_5POPS"
    
    BATCHFILE="MODEL_BATCH_5POP.par"
    
@@ -45,7 +45,7 @@ source("/home/0_PROGRAMS/0_Weir_Lab_Custom_Code/fastSIMCOAL2_sim_forward_Pipelin
    
    RESULTS="SIMULATION_RESULTS"
    
-   NCORES=24'
+   NCORES=24
 ```
 
 
