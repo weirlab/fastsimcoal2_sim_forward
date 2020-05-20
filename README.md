@@ -12,6 +12,13 @@ The pipeline is currently coded only for a fastSIMCOAL2 model with 5 populations
 The following R packages must be installed:
 dplyr
 
+The following programs must be accessible:
+fsc26 (fastSIMCOAL2)
+
+This program must be placed in the working directory set by the WD option below:
+
+ADMIXTURE #in R code programmed to occur here: /opt/POPGEN/admixture_linux-1.3.0/admixture.
+
 ---
 # PIPELINE
 ---
